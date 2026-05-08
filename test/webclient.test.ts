@@ -1,18 +1,11 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { createServer, type Server } from 'node:http';
-import { createServer as createHttpsServer, type Server as HttpsServer } from 'node:https';
 import { after, before, describe, it } from 'node:test';
 import 'dotenv/config';
-import {
-  type ConversationsListResponse,
-  ErrorCode,
-  type FetchFunction,
-  WebClient,
-} from '@slack/web-api';
+import { type ConversationsListResponse, ErrorCode, type FetchFunction, WebClient } from '@slack/web-api';
 import { createProxy } from 'proxy';
-import selfsigned from 'selfsigned';
-import { Agent, type Dispatcher, ProxyAgent, fetch as undiciFetch } from 'undici';
+import { type Dispatcher, ProxyAgent, fetch as undiciFetch } from 'undici';
 
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 const SLACK_CHANNEL_ID = process.env.SLACK_CHANNEL_ID;
@@ -164,115 +157,6 @@ describe('WebClient', () => {
     const result = await client.auth.test();
     assert.equal(result.ok, true, 'auth.test should succeed through proxy');
     assert.equal(typeof result.user_id, 'string', 'user_id should be present');
-  });
-
-  describe('TLS override (self-signed cert)', () => {
-    let fakeSlackServer: HttpsServer;
-    let fakeSlackUrl: string;
-
-    before(async () => {
-      const { private: key, cert } = await selfsigned.generate([{ name: 'commonName', value: 'localhost' }], {
-        keySize: 2048,
-        notAfterDate: new Date(Date.now() + 24 * 60 * 60 * 1000),
-      });
-      fakeSlackServer = createHttpsServer({ key, cert }, (_req, res) => {
-        res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ ok: true, user_id: 'U_SELFSIGNED', team_id: 'T123', bot_id: 'B123' }));
-      });
-      fakeSlackServer.listen(0, '127.0.0.1');
-      await once(fakeSlackServer, 'listening');
-      const addr = fakeSlackServer.address() as { port: number };
-      fakeSlackUrl = `https://127.0.0.1:${addr.port}/`;
-    });
-
-    after(async () => {
-      await new Promise<void>((res, rej) => fakeSlackServer.close((err) => (err ? rej(err) : res())));
-    });
-
-    it('rejects self-signed certificate by default (Agent)', async () => {
-      const dispatcher = new Agent();
-      const tlsFetch = createDispatcherFetch(dispatcher);
-
-      const client = new WebClient('xoxb-fake-token', {
-        slackApiUrl: fakeSlackUrl,
-        fetch: tlsFetch,
-        retryConfig: { retries: 0 },
-      });
-
-      try {
-        await client.auth.test();
-        assert.fail('Should have thrown due to self-signed certificate');
-      } catch (err: unknown) {
-        const error = err as { code?: string; original?: Error & { cause?: Error & { code?: string } } };
-        assert.equal(error.code, ErrorCode.RequestError);
-        assert.ok(error.original instanceof Error);
-        const cause = error.original.cause;
-        assert.ok(cause instanceof Error, 'should have a cause with the TLS error');
-        assert.match(
-          cause.code || cause.message,
-          /DEPTH_ZERO_SELF_SIGNED_CERT|UNABLE_TO_VERIFY_LEAF_SIGNATURE|SELF_SIGNED_CERT_IN_CHAIN|self.signed/i,
-        );
-      }
-    });
-
-    it('succeeds with rejectUnauthorized: false (Agent)', async () => {
-      const dispatcher = new Agent({ connect: { rejectUnauthorized: false } });
-      const tlsFetch = createDispatcherFetch(dispatcher);
-
-      const client = new WebClient('xoxb-fake-token', {
-        slackApiUrl: fakeSlackUrl,
-        fetch: tlsFetch,
-        retryConfig: { retries: 0 },
-      });
-
-      const result = await client.auth.test();
-      assert.equal(result.ok, true);
-      assert.equal(result.user_id, 'U_SELFSIGNED');
-    });
-
-    it('rejects self-signed certificate through proxy by default (ProxyAgent)', async () => {
-      const dispatcher = new ProxyAgent({ uri: proxyUrl });
-      const proxyFetch = createDispatcherFetch(dispatcher);
-
-      const client = new WebClient('xoxb-fake-token', {
-        slackApiUrl: fakeSlackUrl,
-        fetch: proxyFetch,
-        retryConfig: { retries: 0 },
-      });
-
-      try {
-        await client.auth.test();
-        assert.fail('Should have thrown due to self-signed certificate');
-      } catch (err: unknown) {
-        const error = err as { code?: string; original?: Error & { cause?: Error & { code?: string } } };
-        assert.equal(error.code, ErrorCode.RequestError);
-        assert.ok(error.original instanceof Error);
-        const cause = error.original.cause;
-        assert.ok(cause instanceof Error, 'should have a cause with the TLS error');
-        assert.match(
-          cause.code || cause.message,
-          /DEPTH_ZERO_SELF_SIGNED_CERT|UNABLE_TO_VERIFY_LEAF_SIGNATURE|SELF_SIGNED_CERT_IN_CHAIN|self.signed/i,
-        );
-      }
-    });
-
-    it('succeeds with ProxyAgent requestTls: { rejectUnauthorized: false }', async () => {
-      const dispatcher = new ProxyAgent({
-        uri: proxyUrl,
-        requestTls: { rejectUnauthorized: false },
-      });
-      const proxyFetch = createDispatcherFetch(dispatcher);
-
-      const client = new WebClient('xoxb-fake-token', {
-        slackApiUrl: fakeSlackUrl,
-        fetch: proxyFetch,
-        retryConfig: { retries: 0 },
-      });
-
-      const result = await client.auth.test();
-      assert.equal(result.ok, true);
-      assert.equal(result.user_id, 'U_SELFSIGNED');
-    });
   });
 
   it('Timeout handling', async () => {

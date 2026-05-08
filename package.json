@@ -26,7 +26,6 @@
     "@biomejs/biome": "^2.4.13",
     "@types/node": "^25.6.2",
     "proxy": "^4.0.0",
-    "selfsigned": "^5.5.0",
     "tsx": "^4.19.0",
     "typescript": "5.9.3"
   }
