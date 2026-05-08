@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
+import { once } from 'node:events';
 import { createServer, type Server } from 'node:http';
 import { after, before, describe, it } from 'node:test';
 import 'dotenv/config';
-import { type Logger, LogLevel, SocketModeClient, type SocketModeOptions } from '@slack/socket-mode';
-import type { FetchFunction } from '@slack/web-api';
+import { type Logger, LogLevel, SocketModeClient } from '@slack/socket-mode';
 import { createProxy } from 'proxy';
 import { ProxyAgent, fetch as undiciFetch } from 'undici';
 
@@ -52,16 +52,14 @@ describe('SocketModeClient', () => {
       throw new Error('SLACK_APP_TOKEN environment variable is required.');
     }
     proxyServer = createProxy(createServer());
-    await new Promise<void>((resolve, reject) => {
-      proxyServer.listen(0, '127.0.0.1', () => resolve());
-      proxyServer.on('error', reject);
-    });
+    proxyServer.listen(0, '127.0.0.1');
+    await once(proxyServer, 'listening');
     const addr = proxyServer.address() as { port: number };
     proxyUrl = `http://127.0.0.1:${addr.port}`;
   });
 
-  after(async () => {
-    await new Promise<void>((res, rej) => proxyServer.close((err) => (err ? rej(err) : res())));
+  after(() => {
+    proxyServer.close();
   });
 
   it('Construction validation', async () => {
@@ -75,15 +73,6 @@ describe('SocketModeClient', () => {
 
     const client = new SocketModeClient({ appToken: SLACK_APP_TOKEN! });
     assert.ok(client instanceof SocketModeClient, 'should create instance');
-
-    const _opts: SocketModeOptions = {
-      appToken: SLACK_APP_TOKEN!,
-      autoReconnectEnabled: true,
-      pingPongLoggingEnabled: false,
-      clientPingTimeout: 5000,
-      serverPingTimeout: 30000,
-      clientOptions: { timeout: 10000 },
-    };
   });
 
   it('Connection lifecycle', { timeout: 20000 }, async () => {
@@ -142,14 +131,14 @@ describe('SocketModeClient', () => {
 
     client.on('slack_event', async ({ ack, body }) => {
       eventReceived = true;
-      console.log(`       -> Received event type: ${body?.type ?? 'unknown'}`);
+      console.log(`-> Received event type: ${body?.type ?? 'unknown'}`);
       await ack();
       ackSent = true;
     });
 
     try {
       await withTimeout(client.start(), 15000, 'client.start()');
-      console.log('       -> Waiting up to 30s for an event (send a slash command to your app)...');
+      console.log('-> Waiting up to 30s for an event (send a slash command to your app)...');
 
       const deadline = Date.now() + 30000;
       while (!eventReceived && Date.now() < deadline) {
@@ -158,9 +147,9 @@ describe('SocketModeClient', () => {
 
       if (eventReceived) {
         assert.ok(ackSent, 'ack should have been sent');
-        console.log('       -> Event received and acknowledged successfully');
+        console.log('-> Event received and acknowledged successfully');
       } else {
-        console.log('       -> No event received within 30s (test passes — connection was stable)');
+        console.log('-> No event received within 30s (test passes — connection was stable)');
       }
     } finally {
       await client.disconnect();
@@ -184,19 +173,19 @@ describe('SocketModeClient', () => {
       await withTimeout(client.start(), 15000, 'client.start()');
       assert.ok(events.includes('connected'), 'should initially connect');
 
-      console.log('       -> Waiting up to 20s for reconnect cycle...');
+      console.log('-> Waiting up to 20s for reconnect cycle...');
       const deadline = Date.now() + 20000;
       while (!events.includes('reconnecting') && Date.now() < deadline) {
         await delay(500);
       }
 
       if (events.includes('reconnecting')) {
-        console.log('       -> Reconnection triggered and observed');
+        console.log('-> Reconnection triggered and observed');
         await delay(5000);
         const connectedCount = events.filter((e) => e === 'connected').length;
         assert.ok(connectedCount >= 2, `should have reconnected (connected count: ${connectedCount})`);
       } else {
-        console.log('       -> No reconnect needed (server responded within timeout)');
+        console.log('-> No reconnect needed (server responded within timeout)');
       }
     } finally {
       await client.disconnect();
@@ -223,13 +212,13 @@ describe('SocketModeClient', () => {
     const dispatcher = new ProxyAgent(proxyUrl);
     let customFetchCalled = false;
 
-    const customFetch: FetchFunction = ((
+    const customFetch: typeof fetch = ((
       input: Parameters<typeof undiciFetch>[0],
       init?: Parameters<typeof undiciFetch>[1],
     ) => {
       customFetchCalled = true;
       return undiciFetch(input, { ...init, dispatcher });
-    }) as unknown as FetchFunction;
+    }) as unknown as typeof fetch;
 
     const client = new SocketModeClient({
       appToken: SLACK_APP_TOKEN!,
@@ -259,14 +248,14 @@ describe('SocketModeClient', () => {
     try {
       await withTimeout(client.start(), 15000, 'client.start()');
 
-      console.log('       -> Monitoring ping/pong for 12 seconds...');
+      console.log('-> Monitoring ping/pong for 12 seconds...');
       await delay(12000);
 
       const pingLogs = logs.filter((l) => l.includes('ping') || l.includes('pong'));
-      console.log(`       -> Captured ${pingLogs.length} ping/pong log entries`);
+      console.log(`-> Captured ${pingLogs.length} ping/pong log entries`);
 
       if (pingLogs.length > 0) {
-        console.log(`       -> Sample: ${pingLogs[0]}`);
+        console.log(`-> Sample: ${pingLogs[0]}`);
       }
 
       assert.ok(pingLogs.length > 0, 'should have observed ping/pong activity');

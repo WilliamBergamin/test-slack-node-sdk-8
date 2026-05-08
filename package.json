@@ -4,9 +4,12 @@
   "type": "module",
   "description": "Test our changes for the new slack node sdk v8",
   "scripts": {
+    "lint": "npx @biomejs/biome check test",
+    "lint:fix": "npx @biomejs/biome check --write test",
     "test": "node --import tsx --test test/*.test.ts",
     "test:webclient": "node --import tsx --test test/webclient.test.ts",
-    "test:socketmode": "node --import tsx --test test/socketmode.test.ts"
+    "test:socketmode": "node --import tsx --test test/socketmode.test.ts",
+    "test:types": "npx tsc --noEmit"
   },
   "author": "",
   "license": "MIT",
@@ -16,12 +19,15 @@
     "@slack/socket-mode": "file:../node-slack-sdk/packages/socket-mode",
     "@slack/types": "file:../node-slack-sdk/packages/types",
     "@slack/web-api": "file:../node-slack-sdk/packages/web-api",
-    "dotenv": "~17.4.2"
+    "dotenv": "~17.4.2",
+    "undici": "^7"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.13",
+    "@types/node": "^25.6.2",
     "proxy": "^4.0.0",
+    "selfsigned": "^5.5.0",
     "tsx": "^4.19.0",
-    "undici": "^7.25.0"
+    "typescript": "5.9.3"
   }
 }

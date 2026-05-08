@@ -1,26 +1,26 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { once } from 'node:events';
 import { createServer, type Server } from 'node:http';
+import { createServer as createHttpsServer, type Server as HttpsServer } from 'node:https';
 import { after, before, describe, it } from 'node:test';
 import 'dotenv/config';
 import {
-  type AuthTestResponse,
-  type ChatPostMessageResponse,
   type ConversationsListResponse,
   ErrorCode,
   type FetchFunction,
-  type WebAPICallResult,
   WebClient,
-  type WebClientOptions,
 } from '@slack/web-api';
 import { createProxy } from 'proxy';
-import { Agent, ProxyAgent, fetch as undiciFetch } from 'undici';
+import selfsigned from 'selfsigned';
+import { Agent, type Dispatcher, ProxyAgent, fetch as undiciFetch } from 'undici';
 
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 const SLACK_CHANNEL_ID = process.env.SLACK_CHANNEL_ID;
-const TLS_CA_PATH = process.env.TLS_CA_PATH;
-const TLS_CERT_PATH = process.env.TLS_CERT_PATH;
-const TLS_KEY_PATH = process.env.TLS_KEY_PATH;
+
+function createDispatcherFetch(dispatcher: Dispatcher): FetchFunction {
+  return ((input: Parameters<typeof undiciFetch>[0], init?: Parameters<typeof undiciFetch>[1]) =>
+    undiciFetch(input, { ...init, dispatcher })) as unknown as FetchFunction;
+}
 
 describe('WebClient', () => {
   let proxyServer: Server;
@@ -31,16 +31,14 @@ describe('WebClient', () => {
       throw new Error('SLACK_BOT_TOKEN and SLACK_CHANNEL_ID environment variables are required.');
     }
     proxyServer = createProxy(createServer());
-    await new Promise<void>((resolve, reject) => {
-      proxyServer.listen(0, '127.0.0.1', () => resolve());
-      proxyServer.on('error', reject);
-    });
+    proxyServer.listen(0, '127.0.0.1');
+    await once(proxyServer, 'listening');
     const addr = proxyServer.address() as { port: number };
     proxyUrl = `http://127.0.0.1:${addr.port}`;
   });
 
-  after(async () => {
-    await new Promise<void>((res, rej) => proxyServer.close((err) => (err ? rej(err) : res())));
+  after(() => {
+    proxyServer.close();
   });
 
   it('Basic Construction', async () => {
@@ -55,14 +53,11 @@ describe('WebClient', () => {
 
     const client3 = new WebClient(SLACK_BOT_TOKEN, { slackApiUrl: 'https://example.com/api' });
     assert.equal(client3.slackApiUrl, 'https://example.com/api/', 'should add trailing slash');
-
-    const customFetch: FetchFunction = globalThis.fetch;
-    const _opts: WebClientOptions = { fetch: customFetch, timeout: 5000 };
   });
 
   it('auth.test', async () => {
     const client = new WebClient(SLACK_BOT_TOKEN);
-    const result = (await client.auth.test()) as AuthTestResponse;
+    const result = await client.auth.test();
     assert.equal(result.ok, true, 'result.ok should be true');
     assert.equal(typeof result.user_id, 'string', 'user_id should be a string');
     assert.equal(typeof result.team_id, 'string', 'team_id should be a string');
@@ -71,10 +66,10 @@ describe('WebClient', () => {
 
   it('chat.postMessage (text)', async () => {
     const client = new WebClient(SLACK_BOT_TOKEN);
-    const result = (await client.chat.postMessage({
+    const result = await client.chat.postMessage({
       channel: SLACK_CHANNEL_ID!,
       text: `[manual-verification] text message @ ${new Date().toISOString()}`,
-    })) as ChatPostMessageResponse;
+    });
     assert.equal(result.ok, true, 'result.ok should be true');
     assert.equal(typeof result.ts, 'string', 'ts should be a string');
     assert.equal(typeof result.channel, 'string', 'channel should be returned');
@@ -82,7 +77,7 @@ describe('WebClient', () => {
 
   it('chat.postMessage (blocks)', async () => {
     const client = new WebClient(SLACK_BOT_TOKEN);
-    const result = (await client.chat.postMessage({
+    const result = await client.chat.postMessage({
       channel: SLACK_CHANNEL_ID!,
       text: 'fallback text',
       blocks: [
@@ -98,7 +93,7 @@ describe('WebClient', () => {
           text: { type: 'plain_text', text: 'This verifies Block Kit serialization works with native fetch.' },
         },
       ],
-    })) as ChatPostMessageResponse;
+    });
     assert.equal(result.ok, true, 'result.ok should be true');
     assert.equal(typeof result.ts, 'string', 'ts should be a string');
   });
@@ -106,12 +101,12 @@ describe('WebClient', () => {
   it('files.uploadV2 (Buffer)', async () => {
     const client = new WebClient(SLACK_BOT_TOKEN);
     const content = `Hello from manual verification @ ${new Date().toISOString()}`;
-    const result = await client.files.uploadV2({
+    const result = (await client.files.uploadV2({
       channel_id: SLACK_CHANNEL_ID!,
       content,
       filename: 'verification-buffer.txt',
       title: 'Buffer Upload Test',
-    });
+    })) as { ok: boolean; files: unknown[] };
     assert.equal(result.ok, true, 'result.ok should be true');
     assert.ok(Array.isArray(result.files), 'result.files should be an array');
     assert.ok(result.files.length > 0, 'should have at least one file');
@@ -119,13 +114,13 @@ describe('WebClient', () => {
 
   it('files.uploadV2 (multiple)', async () => {
     const client = new WebClient(SLACK_BOT_TOKEN);
-    const result = await client.files.uploadV2({
+    const result = (await client.files.uploadV2({
       channel_id: SLACK_CHANNEL_ID!,
       file_uploads: [
         { content: 'File one content', filename: 'multi-file-1.txt', title: 'Multi 1' },
         { content: 'File two content', filename: 'multi-file-2.txt', title: 'Multi 2' },
       ],
-    });
+    })) as { ok: boolean; files: unknown[] };
     assert.equal(result.ok, true, 'result.ok should be true');
     assert.ok(Array.isArray(result.files), 'result.files should be an array');
     assert.ok(result.files.length >= 1, 'should have completed uploads');
@@ -133,12 +128,12 @@ describe('WebClient', () => {
 
   it('files.uploadV2 (file path)', async () => {
     const client = new WebClient(SLACK_BOT_TOKEN);
-    const result = await client.files.uploadV2({
+    const result = (await client.files.uploadV2({
       channel_id: SLACK_CHANNEL_ID!,
       file: import.meta.filename ?? new URL(import.meta.url).pathname,
       filename: 'webclient.test.ts',
       title: 'Verification Script Upload',
-    });
+    })) as { ok: boolean; files: unknown[] };
     assert.equal(result.ok, true, 'result.ok should be true');
     assert.ok(Array.isArray(result.files), 'result.files should be an array');
     assert.ok(result.files.length > 0, 'should have at least one file');
@@ -147,7 +142,7 @@ describe('WebClient', () => {
   it('Pagination (conversations.list)', async () => {
     const client = new WebClient(SLACK_BOT_TOKEN);
     let pageCount = 0;
-    const pages: WebAPICallResult[] = [];
+    const pages: ConversationsListResponse[] = [];
 
     for await (const page of client.paginate('conversations.list', { limit: 2 })) {
       pages.push(page);
@@ -156,50 +151,128 @@ describe('WebClient', () => {
     }
 
     assert.ok(pageCount >= 1, 'should receive at least one page');
-    const firstPage = pages[0] as ConversationsListResponse;
+    const firstPage = pages[0];
     assert.equal(firstPage.ok, true, 'first page ok should be true');
     assert.ok(Array.isArray(firstPage.channels), 'channels should be an array');
   });
 
   it('Custom fetch / Proxy', async () => {
     const dispatcher = new ProxyAgent(proxyUrl);
-    const proxyFetch: FetchFunction = ((input: RequestInfo | URL, init?: RequestInit) =>
-      undiciFetch(
-        input as Parameters<typeof undiciFetch>[0],
-        {
-          ...init,
-          dispatcher,
-        } as Parameters<typeof undiciFetch>[1],
-      )) as unknown as FetchFunction;
+    const proxyFetch = createDispatcherFetch(dispatcher);
 
     const client = new WebClient(SLACK_BOT_TOKEN, { fetch: proxyFetch });
-    const result = (await client.auth.test()) as AuthTestResponse;
+    const result = await client.auth.test();
     assert.equal(result.ok, true, 'auth.test should succeed through proxy');
     assert.equal(typeof result.user_id, 'string', 'user_id should be present');
   });
 
-  it('TLS configuration', {
-    skip: !(TLS_CA_PATH && TLS_CERT_PATH && TLS_KEY_PATH) && 'TLS_CA_PATH/TLS_CERT_PATH/TLS_KEY_PATH not set',
-  }, async () => {
-    const dispatcher = new Agent({
-      connect: {
-        ca: readFileSync(TLS_CA_PATH!),
-        cert: readFileSync(TLS_CERT_PATH!),
-        key: readFileSync(TLS_KEY_PATH!),
-      },
-    });
-    const tlsFetch: FetchFunction = ((input: RequestInfo | URL, init?: RequestInit) =>
-      undiciFetch(
-        input as Parameters<typeof undiciFetch>[0],
-        {
-          ...init,
-          dispatcher,
-        } as Parameters<typeof undiciFetch>[1],
-      )) as unknown as FetchFunction;
+  describe('TLS override (self-signed cert)', () => {
+    let fakeSlackServer: HttpsServer;
+    let fakeSlackUrl: string;
 
-    const client = new WebClient(SLACK_BOT_TOKEN, { fetch: tlsFetch });
-    const result = (await client.auth.test()) as AuthTestResponse;
-    assert.equal(result.ok, true, 'auth.test should succeed with TLS config');
+    before(async () => {
+      const { private: key, cert } = await selfsigned.generate([{ name: 'commonName', value: 'localhost' }], {
+        keySize: 2048,
+        notAfterDate: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      });
+      fakeSlackServer = createHttpsServer({ key, cert }, (_req, res) => {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, user_id: 'U_SELFSIGNED', team_id: 'T123', bot_id: 'B123' }));
+      });
+      fakeSlackServer.listen(0, '127.0.0.1');
+      await once(fakeSlackServer, 'listening');
+      const addr = fakeSlackServer.address() as { port: number };
+      fakeSlackUrl = `https://127.0.0.1:${addr.port}/`;
+    });
+
+    after(async () => {
+      await new Promise<void>((res, rej) => fakeSlackServer.close((err) => (err ? rej(err) : res())));
+    });
+
+    it('rejects self-signed certificate by default (Agent)', async () => {
+      const dispatcher = new Agent();
+      const tlsFetch = createDispatcherFetch(dispatcher);
+
+      const client = new WebClient('xoxb-fake-token', {
+        slackApiUrl: fakeSlackUrl,
+        fetch: tlsFetch,
+        retryConfig: { retries: 0 },
+      });
+
+      try {
+        await client.auth.test();
+        assert.fail('Should have thrown due to self-signed certificate');
+      } catch (err: unknown) {
+        const error = err as { code?: string; original?: Error & { cause?: Error & { code?: string } } };
+        assert.equal(error.code, ErrorCode.RequestError);
+        assert.ok(error.original instanceof Error);
+        const cause = error.original.cause;
+        assert.ok(cause instanceof Error, 'should have a cause with the TLS error');
+        assert.match(
+          cause.code || cause.message,
+          /DEPTH_ZERO_SELF_SIGNED_CERT|UNABLE_TO_VERIFY_LEAF_SIGNATURE|SELF_SIGNED_CERT_IN_CHAIN|self.signed/i,
+        );
+      }
+    });
+
+    it('succeeds with rejectUnauthorized: false (Agent)', async () => {
+      const dispatcher = new Agent({ connect: { rejectUnauthorized: false } });
+      const tlsFetch = createDispatcherFetch(dispatcher);
+
+      const client = new WebClient('xoxb-fake-token', {
+        slackApiUrl: fakeSlackUrl,
+        fetch: tlsFetch,
+        retryConfig: { retries: 0 },
+      });
+
+      const result = await client.auth.test();
+      assert.equal(result.ok, true);
+      assert.equal(result.user_id, 'U_SELFSIGNED');
+    });
+
+    it('rejects self-signed certificate through proxy by default (ProxyAgent)', async () => {
+      const dispatcher = new ProxyAgent({ uri: proxyUrl });
+      const proxyFetch = createDispatcherFetch(dispatcher);
+
+      const client = new WebClient('xoxb-fake-token', {
+        slackApiUrl: fakeSlackUrl,
+        fetch: proxyFetch,
+        retryConfig: { retries: 0 },
+      });
+
+      try {
+        await client.auth.test();
+        assert.fail('Should have thrown due to self-signed certificate');
+      } catch (err: unknown) {
+        const error = err as { code?: string; original?: Error & { cause?: Error & { code?: string } } };
+        assert.equal(error.code, ErrorCode.RequestError);
+        assert.ok(error.original instanceof Error);
+        const cause = error.original.cause;
+        assert.ok(cause instanceof Error, 'should have a cause with the TLS error');
+        assert.match(
+          cause.code || cause.message,
+          /DEPTH_ZERO_SELF_SIGNED_CERT|UNABLE_TO_VERIFY_LEAF_SIGNATURE|SELF_SIGNED_CERT_IN_CHAIN|self.signed/i,
+        );
+      }
+    });
+
+    it('succeeds with ProxyAgent requestTls: { rejectUnauthorized: false }', async () => {
+      const dispatcher = new ProxyAgent({
+        uri: proxyUrl,
+        requestTls: { rejectUnauthorized: false },
+      });
+      const proxyFetch = createDispatcherFetch(dispatcher);
+
+      const client = new WebClient('xoxb-fake-token', {
+        slackApiUrl: fakeSlackUrl,
+        fetch: proxyFetch,
+        retryConfig: { retries: 0 },
+      });
+
+      const result = await client.auth.test();
+      assert.equal(result.ok, true);
+      assert.equal(result.user_id, 'U_SELFSIGNED');
+    });
   });
 
   it('Timeout handling', async () => {
