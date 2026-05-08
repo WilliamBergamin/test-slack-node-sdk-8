@@ -5,15 +5,10 @@ import { after, before, describe, it } from 'node:test';
 import 'dotenv/config';
 import { type ConversationsListResponse, ErrorCode, type FetchFunction, WebClient } from '@slack/web-api';
 import { createProxy } from 'proxy';
-import { type Dispatcher, ProxyAgent, fetch as undiciFetch } from 'undici';
+import { ProxyAgent, type RequestInit, fetch as undiciFetch } from 'undici';
 
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 const SLACK_CHANNEL_ID = process.env.SLACK_CHANNEL_ID;
-
-function createDispatcherFetch(dispatcher: Dispatcher): FetchFunction {
-  return ((input: Parameters<typeof undiciFetch>[0], init?: Parameters<typeof undiciFetch>[1]) =>
-    undiciFetch(input, { ...init, dispatcher })) as unknown as FetchFunction;
-}
 
 describe('WebClient', () => {
   let proxyServer: Server;
@@ -151,7 +146,7 @@ describe('WebClient', () => {
 
   it('Custom fetch / Proxy', async () => {
     const dispatcher = new ProxyAgent(proxyUrl);
-    const proxyFetch = createDispatcherFetch(dispatcher);
+    const proxyFetch: FetchFunction = (url, init) => undiciFetch(url, { ...(init as RequestInit), dispatcher });
 
     const client = new WebClient(SLACK_BOT_TOKEN, { fetch: proxyFetch });
     const result = await client.auth.test();

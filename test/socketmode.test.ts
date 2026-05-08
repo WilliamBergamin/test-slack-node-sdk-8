@@ -4,8 +4,9 @@ import { createServer, type Server } from 'node:http';
 import { after, before, describe, it } from 'node:test';
 import 'dotenv/config';
 import { type Logger, LogLevel, SocketModeClient } from '@slack/socket-mode';
+import type { FetchFunction } from '@slack/web-api';
 import { createProxy } from 'proxy';
-import { ProxyAgent, fetch as undiciFetch } from 'undici';
+import { ProxyAgent, type RequestInit, fetch as undiciFetch } from 'undici';
 
 const SLACK_APP_TOKEN = process.env.SLACK_APP_TOKEN;
 
@@ -212,13 +213,10 @@ describe('SocketModeClient', () => {
     const dispatcher = new ProxyAgent(proxyUrl);
     let customFetchCalled = false;
 
-    const customFetch: typeof fetch = ((
-      input: Parameters<typeof undiciFetch>[0],
-      init?: Parameters<typeof undiciFetch>[1],
-    ) => {
+    const customFetch: FetchFunction = (url, init) => {
       customFetchCalled = true;
-      return undiciFetch(input, { ...init, dispatcher });
-    }) as unknown as typeof fetch;
+      return undiciFetch(url, { ...(init as RequestInit), dispatcher });
+    };
 
     const client = new SocketModeClient({
       appToken: SLACK_APP_TOKEN!,

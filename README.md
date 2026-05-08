@@ -2,10 +2,6 @@
 
 Integration test suite for validating the Slack Node.js SDK v8 release candidates. Covers `@slack/web-api` (HTTP) and `@slack/socket-mode` (WebSocket) across various network scenarios including proxies, timeouts, and error handling.
 
-## Issues
-
-The types are struggling with undici imported types from the SDK
-
 ## Prerequisites
 
 - Node.js (ES2022+)
