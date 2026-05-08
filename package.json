@@ -1,0 +1,27 @@
+{
+  "name": "test-sdk-v8-scripts",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Test our changes for the new slack node sdk v8",
+  "scripts": {
+    "test": "node --import tsx --test test/*.test.ts",
+    "test:webclient": "node --import tsx --test test/webclient.test.ts",
+    "test:socketmode": "node --import tsx --test test/socketmode.test.ts"
+  },
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@slack/logger": "file:../node-slack-sdk/packages/logger",
+    "@slack/oauth": "file:../node-slack-sdk/packages/oauth",
+    "@slack/socket-mode": "file:../node-slack-sdk/packages/socket-mode",
+    "@slack/types": "file:../node-slack-sdk/packages/types",
+    "@slack/web-api": "file:../node-slack-sdk/packages/web-api",
+    "dotenv": "~17.4.2"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.13",
+    "proxy": "^4.0.0",
+    "tsx": "^4.19.0",
+    "undici": "^7.25.0"
+  }
+}
