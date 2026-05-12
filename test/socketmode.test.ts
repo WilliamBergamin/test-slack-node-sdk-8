@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { createServer, type Server } from 'node:http';
+import http, { createServer, type Server } from 'node:http';
 import { after, before, describe, it } from 'node:test';
 import 'dotenv/config';
 import { type Logger, LogLevel, SocketModeClient } from '@slack/socket-mode';
@@ -182,7 +182,7 @@ describe('SocketModeClient', () => {
 
       if (events.includes('reconnecting')) {
         console.log('-> Reconnection triggered and observed');
-        await delay(5000);
+        await delay(4000);
         const connectedCount = events.filter((e) => e === 'connected').length;
         assert.ok(connectedCount >= 2, `should have reconnected (connected count: ${connectedCount})`);
       } else {
@@ -206,6 +206,46 @@ describe('SocketModeClient', () => {
       assert.equal(result.ok, true, 'should connect successfully through proxy');
     } finally {
       await client.disconnect();
+    }
+  });
+
+  it('setGlobalProxyFromEnv', { timeout: 20000 }, async () => {
+    const originalHttpProxy = process.env.HTTP_PROXY;
+    const originalHttpsProxy = process.env.HTTPS_PROXY;
+    const tunnelledHosts: string[] = [];
+    const onConnect = (req: { url?: string }) => {
+      if (req.url) tunnelledHosts.push(req.url);
+    };
+    proxyServer.on('connect', onConnect);
+
+    try {
+      process.env.HTTP_PROXY = proxyUrl;
+      process.env.HTTPS_PROXY = proxyUrl;
+      http.setGlobalProxyFromEnv();
+
+      const client = new SocketModeClient({
+        appToken: SLACK_APP_TOKEN!,
+        logLevel: LogLevel.WARN,
+      });
+
+      try {
+        const result = await withTimeout(client.start(), 15000, 'client.start() via setGlobalProxyFromEnv');
+        assert.equal(result.ok, true, 'should connect successfully through global proxy');
+      } finally {
+        await client.disconnect();
+      }
+
+      const httpTunnel = tunnelledHosts.find((h) => h.includes('slack.com:443'));
+      const wsTunnel = tunnelledHosts.find((h) => h.includes('wss-') || (h.includes('slack') && h !== httpTunnel));
+      assert.ok(httpTunnel, `HTTP API call should tunnel through proxy (got: ${tunnelledHosts.join(', ')})`);
+      assert.ok(wsTunnel, `WebSocket should tunnel through proxy (got: ${tunnelledHosts.join(', ')})`);
+    } finally {
+      proxyServer.removeListener('connect', onConnect);
+      if (originalHttpProxy === undefined) delete process.env.HTTP_PROXY;
+      else process.env.HTTP_PROXY = originalHttpProxy;
+      if (originalHttpsProxy === undefined) delete process.env.HTTPS_PROXY;
+      else process.env.HTTPS_PROXY = originalHttpsProxy;
+      http.setGlobalProxyFromEnv();
     }
   });
 

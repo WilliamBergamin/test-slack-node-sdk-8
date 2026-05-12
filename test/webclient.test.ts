@@ -1,11 +1,18 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { createServer, type Server } from 'node:http';
+import { Readable } from 'node:stream';
 import { after, before, describe, it } from 'node:test';
 import 'dotenv/config';
-import { type ConversationsListResponse, ErrorCode, type FetchFunction, WebClient } from '@slack/web-api';
+import {
+  type ConversationsListResponse,
+  ErrorCode,
+  type FetchFunction,
+  type WebAPIHTTPError,
+  WebClient,
+} from '@slack/web-api';
 import { createProxy } from 'proxy';
-import { ProxyAgent, type RequestInit, fetch as undiciFetch } from 'undici';
+import { Agent, ProxyAgent, type RequestInit, fetch as undiciFetch } from 'undici';
 
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 const SLACK_CHANNEL_ID = process.env.SLACK_CHANNEL_ID;
@@ -245,5 +252,129 @@ describe('WebClient', () => {
     assert.equal(capturedHeaders['X-Custom-Header'], 'verification-value', 'custom header should be present');
     assert.ok(capturedHeaders['User-Agent'] !== undefined, 'User-Agent header should be present');
     assert.ok(capturedHeaders.Authorization?.startsWith('Bearer '), 'Authorization header should be set');
+  });
+
+  it('TLS via custom fetch (undici Agent)', async () => {
+    const agent = new Agent({
+      connect: { rejectUnauthorized: true },
+    });
+    const tlsFetch: FetchFunction = (url, init) => undiciFetch(url, { ...(init as RequestInit), dispatcher: agent });
+
+    const client = new WebClient(SLACK_BOT_TOKEN, { fetch: tlsFetch });
+    const result = await client.auth.test();
+    assert.equal(result.ok, true, 'auth.test should succeed with TLS agent');
+    assert.equal(typeof result.user_id, 'string', 'user_id should be present');
+    agent.close();
+  });
+
+  it('Request interceptor via fetch wrapper', async () => {
+    const interceptedRequests: { url: string; method?: string }[] = [];
+
+    const interceptingFetch: FetchFunction = (url, init) => {
+      interceptedRequests.push({ url: url.toString(), method: init?.method });
+      return globalThis.fetch(url, init);
+    };
+
+    const client = new WebClient(SLACK_BOT_TOKEN, { fetch: interceptingFetch });
+    const result = await client.auth.test();
+    assert.equal(result.ok, true, 'auth.test should succeed through interceptor');
+    assert.ok(interceptedRequests.length > 0, 'should have intercepted at least one request');
+    assert.ok(interceptedRequests[0].url.includes('auth.test'), 'intercepted URL should contain auth.test');
+    assert.equal(interceptedRequests[0].method, 'POST', 'method should be POST');
+  });
+
+  it('Mock adapter via custom fetch', async () => {
+    const mockResponse = { ok: true, user_id: 'U_MOCK', team_id: 'T_MOCK', bot_id: 'B_MOCK' };
+
+    const mockFetch: FetchFunction = () =>
+      Promise.resolve(
+        new Response(JSON.stringify(mockResponse), {
+          status: 200,
+          headers: { 'content-type': 'application/json; charset=utf-8' },
+        }),
+      );
+
+    const client = new WebClient('xoxb-mock-token', { fetch: mockFetch });
+    const result = await client.auth.test();
+    assert.equal(result.ok, true, 'result.ok should be true');
+    assert.equal(result.user_id, 'U_MOCK', 'should use mocked user_id');
+    assert.equal(result.team_id, 'T_MOCK', 'should use mocked team_id');
+  });
+
+  it('Error: HTTPError headers are Record<string, string>', async () => {
+    const httpErrorFetch: FetchFunction = () =>
+      Promise.resolve(
+        new Response('Server Error', {
+          status: 500,
+          statusText: 'Internal Server Error',
+          headers: { 'x-custom-header': 'custom-value', 'content-type': 'text/plain' },
+        }),
+      );
+
+    const client = new WebClient(SLACK_BOT_TOKEN, {
+      fetch: httpErrorFetch,
+      retryConfig: { retries: 0 },
+    });
+
+    try {
+      await client.auth.test();
+      assert.fail('Should have thrown an HTTPError');
+    } catch (err: unknown) {
+      const error = err as WebAPIHTTPError;
+      assert.equal(error.code, ErrorCode.HTTPError, `expected HTTPError, got ${error.code}`);
+      assert.equal(error.statusCode, 500, 'statusCode should be 500');
+      assert.equal(typeof error.headers, 'object', 'headers should be an object');
+      assert.equal(error.headers['x-custom-header'], 'custom-value', 'custom header should be a plain string');
+      assert.equal(typeof error.headers['content-type'], 'string', 'content-type should be a string');
+      assert.ok(!Array.isArray(error.headers['x-custom-header']), 'header value should not be an array');
+    }
+  });
+
+  it('Exported Fetch types are usable', async () => {
+    const myFetch: FetchFunction = (url, init) => globalThis.fetch(url, init);
+    const client = new WebClient(SLACK_BOT_TOKEN, { fetch: myFetch });
+    const result = await client.auth.test();
+    assert.equal(result.ok, true, 'should work with FetchFunction-typed custom fetch');
+
+    const nativeFetch: FetchFunction = globalThis.fetch;
+    assert.equal(typeof nativeFetch, 'function', 'globalThis.fetch satisfies FetchFunction');
+  });
+
+  it('files.uploadV2 (Readable stream)', async () => {
+    const content = `Stream upload verification @ ${new Date().toISOString()}`;
+    const readable = Readable.from(Buffer.from(content));
+
+    const result = (await new WebClient(SLACK_BOT_TOKEN).files.uploadV2({
+      channel_id: SLACK_CHANNEL_ID!,
+      file: readable,
+      filename: 'verification-stream.txt',
+      title: 'Readable Stream Upload Test',
+    })) as { ok: boolean; files: unknown[] };
+    assert.equal(result.ok, true, 'result.ok should be true');
+    assert.ok(Array.isArray(result.files), 'result.files should be an array');
+    assert.ok(result.files.length > 0, 'should have at least one file');
+  });
+
+  it('Redirect behavior (default error, custom allows follow)', async () => {
+    const redirectFetch: FetchFunction = (url, init) => {
+      assert.equal(init?.redirect, 'error', 'SDK should pass redirect: error by default');
+      return globalThis.fetch(url, init);
+    };
+
+    const client1 = new WebClient(SLACK_BOT_TOKEN, { fetch: redirectFetch });
+    const result1 = await client1.auth.test();
+    assert.equal(result1.ok, true, 'should succeed and confirm redirect:error was passed');
+
+    let overriddenRedirect: string | undefined;
+    const followRedirectFetch: FetchFunction = (url, init) => {
+      const modifiedInit = { ...init, redirect: 'follow' as RequestRedirect };
+      overriddenRedirect = modifiedInit.redirect;
+      return globalThis.fetch(url, modifiedInit);
+    };
+
+    const client2 = new WebClient(SLACK_BOT_TOKEN, { fetch: followRedirectFetch });
+    const result2 = await client2.auth.test();
+    assert.equal(result2.ok, true, 'should succeed with redirect:follow');
+    assert.equal(overriddenRedirect, 'follow', 'redirect should have been overridden to follow');
   });
 });
