@@ -8,7 +8,13 @@ import {
   type ConversationsListResponse,
   ErrorCode,
   type FetchFunction,
-  type WebAPIHTTPError,
+  type FilesCompleteUploadExternalResponse,
+  SlackError,
+  WebAPIFileUploadInvalidArgumentsError,
+  WebAPIHTTPError,
+  WebAPIPlatformError,
+  WebAPIRateLimitedError,
+  WebAPIRequestError,
   WebClient,
 } from '@slack/web-api';
 import { createProxy } from 'proxy';
@@ -101,7 +107,7 @@ describe('WebClient', () => {
       content,
       filename: 'verification-buffer.txt',
       title: 'Buffer Upload Test',
-    })) as { ok: boolean; files: unknown[] };
+    })) as { ok: boolean; files: FilesCompleteUploadExternalResponse[] };
     assert.equal(result.ok, true, 'result.ok should be true');
     assert.ok(Array.isArray(result.files), 'result.files should be an array');
     assert.ok(result.files.length > 0, 'should have at least one file');
@@ -115,7 +121,7 @@ describe('WebClient', () => {
         { content: 'File one content', filename: 'multi-file-1.txt', title: 'Multi 1' },
         { content: 'File two content', filename: 'multi-file-2.txt', title: 'Multi 2' },
       ],
-    })) as { ok: boolean; files: unknown[] };
+    })) as { ok: boolean; files: FilesCompleteUploadExternalResponse[] };
     assert.equal(result.ok, true, 'result.ok should be true');
     assert.ok(Array.isArray(result.files), 'result.files should be an array');
     assert.ok(result.files.length >= 1, 'should have completed uploads');
@@ -128,7 +134,7 @@ describe('WebClient', () => {
       file: import.meta.filename ?? new URL(import.meta.url).pathname,
       filename: 'webclient.test.ts',
       title: 'Verification Script Upload',
-    })) as { ok: boolean; files: unknown[] };
+    })) as { ok: boolean; files: FilesCompleteUploadExternalResponse[] };
     assert.equal(result.ok, true, 'result.ok should be true');
     assert.ok(Array.isArray(result.files), 'result.files should be an array');
     assert.ok(result.files.length > 0, 'should have at least one file');
@@ -170,9 +176,9 @@ describe('WebClient', () => {
       await client.auth.test();
       assert.fail('Should have thrown a timeout error');
     } catch (err: unknown) {
-      const error = err as { code?: string; original?: Error };
-      assert.equal(error.code, ErrorCode.RequestError, `expected RequestError, got ${error.code}`);
-      assert.ok(error.original instanceof Error, 'should have .original Error attached');
+      assert.ok(err instanceof WebAPIRequestError, 'should be instance of WebAPIRequestError');
+      assert.equal(err.code, ErrorCode.RequestError, `expected RequestError, got ${err.code}`);
+      assert.ok(err.original instanceof Error, 'should have .original Error attached');
     }
   });
 
@@ -182,10 +188,10 @@ describe('WebClient', () => {
       await client.chat.postMessage({ channel: 'CINVALID999', text: 'should fail' });
       assert.fail('Should have thrown a PlatformError');
     } catch (err: unknown) {
-      const error = err as { code?: string; data?: { error: string } };
-      assert.equal(error.code, ErrorCode.PlatformError, `expected PlatformError, got ${error.code}`);
-      assert.equal(typeof error.data?.error, 'string', 'should have .data.error string');
-      assert.ok(error.data!.error.length > 0, 'error string should not be empty');
+      assert.ok(err instanceof WebAPIPlatformError, 'should be instance of WebAPIPlatformError');
+      assert.equal(err.code, ErrorCode.PlatformError, `expected PlatformError, got ${err.code}`);
+      assert.equal(typeof err.data.error, 'string', 'should have .data.error string');
+      assert.ok(err.data.error.length > 0, 'error string should not be empty');
     }
   });
 
@@ -201,10 +207,10 @@ describe('WebClient', () => {
       await client.auth.test();
       assert.fail('Should have thrown a RequestError');
     } catch (err: unknown) {
-      const error = err as { code?: string; original?: Error };
-      assert.equal(error.code, ErrorCode.RequestError, `expected RequestError, got ${error.code}`);
-      assert.ok(error.original instanceof Error, 'should have .original Error');
-      assert.equal(error.original!.message, 'Simulated network failure', 'original message should match');
+      assert.ok(err instanceof WebAPIRequestError, 'should be instance of WebAPIRequestError');
+      assert.equal(err.code, ErrorCode.RequestError, `expected RequestError, got ${err.code}`);
+      assert.ok(err.original instanceof Error, 'should have .original Error');
+      assert.equal(err.original.message, 'Simulated network failure', 'original message should match');
     }
   });
 
@@ -226,9 +232,9 @@ describe('WebClient', () => {
       await client.auth.test();
       assert.fail('Should have thrown a RateLimitedError');
     } catch (err: unknown) {
-      const error = err as { code?: string; retryAfter?: number };
-      assert.equal(error.code, ErrorCode.RateLimitedError, `expected RateLimitedError, got ${error.code}`);
-      assert.equal(error.retryAfter, 30, `retryAfter should be 30, got ${error.retryAfter}`);
+      assert.ok(err instanceof WebAPIRateLimitedError, 'should be instance of WebAPIRateLimitedError');
+      assert.equal(err.code, ErrorCode.RateLimitedError, `expected RateLimitedError, got ${err.code}`);
+      assert.equal(err.retryAfter, 30, `retryAfter should be 30, got ${err.retryAfter}`);
     }
   });
 
@@ -320,13 +326,13 @@ describe('WebClient', () => {
       await client.auth.test();
       assert.fail('Should have thrown an HTTPError');
     } catch (err: unknown) {
-      const error = err as WebAPIHTTPError;
-      assert.equal(error.code, ErrorCode.HTTPError, `expected HTTPError, got ${error.code}`);
-      assert.equal(error.statusCode, 500, 'statusCode should be 500');
-      assert.equal(typeof error.headers, 'object', 'headers should be an object');
-      assert.equal(error.headers['x-custom-header'], 'custom-value', 'custom header should be a plain string');
-      assert.equal(typeof error.headers['content-type'], 'string', 'content-type should be a string');
-      assert.ok(!Array.isArray(error.headers['x-custom-header']), 'header value should not be an array');
+      assert.ok(err instanceof WebAPIHTTPError, 'should be instance of WebAPIHTTPError');
+      assert.equal(err.code, ErrorCode.HTTPError, `expected HTTPError, got ${err.code}`);
+      assert.equal(err.statusCode, 500, 'statusCode should be 500');
+      assert.equal(typeof err.headers, 'object', 'headers should be an object');
+      assert.equal(err.headers['x-custom-header'], 'custom-value', 'custom header should be a plain string');
+      assert.equal(typeof err.headers['content-type'], 'string', 'content-type should be a string');
+      assert.ok(!Array.isArray(err.headers['x-custom-header']), 'header value should not be an array');
     }
   });
 
@@ -349,7 +355,7 @@ describe('WebClient', () => {
       file: readable,
       filename: 'verification-stream.txt',
       title: 'Readable Stream Upload Test',
-    })) as { ok: boolean; files: unknown[] };
+    })) as { ok: boolean; files: FilesCompleteUploadExternalResponse[] };
     assert.equal(result.ok, true, 'result.ok should be true');
     assert.ok(Array.isArray(result.files), 'result.files should be an array');
     assert.ok(result.files.length > 0, 'should have at least one file');
@@ -376,5 +382,87 @@ describe('WebClient', () => {
     const result2 = await client2.auth.test();
     assert.equal(result2.ok, true, 'should succeed with redirect:follow');
     assert.equal(overriddenRedirect, 'follow', 'redirect should have been overridden to follow');
+  });
+
+  it('Error: all WebAPI errors extend SlackError and have .message', async () => {
+    const client = new WebClient(SLACK_BOT_TOKEN, { retryConfig: { retries: 0 } });
+
+    // PlatformError
+    try {
+      await client.chat.postMessage({ channel: 'CINVALID999', text: 'test' });
+      assert.fail('Should have thrown');
+    } catch (err: unknown) {
+      assert.ok(err instanceof Error, 'PlatformError should be instance of Error');
+      assert.ok(err instanceof SlackError, 'PlatformError should be instance of SlackError');
+      assert.ok(err instanceof WebAPIPlatformError, 'should be WebAPIPlatformError');
+      assert.equal(typeof err.message, 'string', 'message should be a string');
+      assert.ok(err.message.length > 0, 'message should not be empty');
+    }
+
+    // RequestError
+    const brokenClient = new WebClient(SLACK_BOT_TOKEN, {
+      fetch: () => {
+        throw new Error('network down');
+      },
+      retryConfig: { retries: 0 },
+    });
+    try {
+      await brokenClient.auth.test();
+      assert.fail('Should have thrown');
+    } catch (err: unknown) {
+      assert.ok(err instanceof Error, 'RequestError should be instance of Error');
+      assert.ok(err instanceof SlackError, 'RequestError should be instance of SlackError');
+      assert.ok(err instanceof WebAPIRequestError, 'should be WebAPIRequestError');
+      assert.equal(typeof err.message, 'string', 'message should be a string');
+      assert.ok(err.message.length > 0, 'message should not be empty');
+    }
+
+    // HTTPError
+    const httpClient = new WebClient(SLACK_BOT_TOKEN, {
+      fetch: () => Promise.resolve(new Response('fail', { status: 500, statusText: 'Internal Server Error' })),
+      retryConfig: { retries: 0 },
+    });
+    try {
+      await httpClient.auth.test();
+      assert.fail('Should have thrown');
+    } catch (err: unknown) {
+      assert.ok(err instanceof Error, 'HTTPError should be instance of Error');
+      assert.ok(err instanceof SlackError, 'HTTPError should be instance of SlackError');
+      assert.ok(err instanceof WebAPIHTTPError, 'should be WebAPIHTTPError');
+      assert.equal(typeof err.message, 'string', 'message should be a string');
+      assert.ok(err.message.length > 0, 'message should not be empty');
+    }
+
+    // RateLimitedError
+    const rateLimitClient = new WebClient(SLACK_BOT_TOKEN, {
+      fetch: () => Promise.resolve(new Response('', { status: 429, headers: { 'retry-after': '10' } })),
+      rejectRateLimitedCalls: true,
+      retryConfig: { retries: 0 },
+    });
+    try {
+      await rateLimitClient.auth.test();
+      assert.fail('Should have thrown');
+    } catch (err: unknown) {
+      assert.ok(err instanceof Error, 'RateLimitedError should be instance of Error');
+      assert.ok(err instanceof SlackError, 'RateLimitedError should be instance of SlackError');
+      assert.ok(err instanceof WebAPIRateLimitedError, 'should be WebAPIRateLimitedError');
+      assert.equal(typeof err.message, 'string', 'message should be a string');
+      assert.ok(err.message.length > 0, 'message should not be empty');
+    }
+  });
+
+  it('Error: WebAPIFileUploadInvalidArgumentsError', async () => {
+    const client = new WebClient(SLACK_BOT_TOKEN);
+    try {
+      await client.filesUploadV2({ file_uploads: [{}] } as any);
+      assert.fail('Should have thrown a file upload invalid arguments error');
+    } catch (err: unknown) {
+      assert.ok(err instanceof SlackError, 'should be instance of SlackError');
+      assert.ok(
+        err instanceof WebAPIFileUploadInvalidArgumentsError,
+        'should be WebAPIFileUploadInvalidArgumentsError',
+      );
+      assert.equal(err.code, ErrorCode.FileUploadInvalidArgumentsError);
+    }
   });
 });
